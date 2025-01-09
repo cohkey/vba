@@ -1,0 +1,9 @@
+﻿Level,Name,ControlType,ClassName,IsEnabled,AutomationId,AriaRole
+0,Application,Window,Window,TRUE,MainWindow,application
+1,File,Menu,MenuItem,TRUE,FileMenu,menuitem
+2,New,MenuItem,MenuItem,TRUE,NewFile,menuitem
+2,Open,MenuItem,MenuItem,FALSE,OpenFile,menuitem
+1,Edit,Menu,NewMenuItem,TRUE,,menuitem
+2,Cut,MenuItem,MenuItem,TRUE,CutAction,menuitem
+2,Redo,MenuItem,MenuItem,TRUE,RedoAction,menuitem
+3,,ButtonControl,Button,,,button
