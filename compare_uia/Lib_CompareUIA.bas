@@ -1,6 +1,115 @@
-Attribute VB_Name = "Lib_CompareUIA"
 Option Explicit
 
+'===========================
+' メインフロー
+'===========================
+Public Sub MainCompareProcedure()
+
+    ' 実行用シート("Execution")のC2, C3からパスを取得
+    Dim wsExec As Worksheet
+    Set wsExec = ThisWorkbook.Worksheets("Execution")
+
+    Dim filePathOld As String
+    Dim filePathNew As String
+    filePathOld = wsExec.Range("C2").Value
+    filePathNew = wsExec.Range("C3").Value
+
+    If filePathOld = "" Or filePathNew = "" Then
+        MsgBox "CSVのパスが入力されていません。ExecutionシートのC2, C3を確認してください。", vbExclamation
+        Exit Sub
+    End If
+
+    ' CSVを"Old"シート、"New"シートとしてUTF-8でインポート
+    Call ImportCSV(filePathOld, "Old")
+    Call ImportCSV(filePathNew, "New")
+
+    ' 比較を実行(CompareOldAndNewは後述の既存コードを流用)
+    Call CompareOldAndNew
+
+    ' 結果シート("Result")を新規ファイルとして保存するかを聞く
+    Dim userResponse As VbMsgBoxResult
+    userResponse = MsgBox("比較結果を新規Excelファイルとして保存しますか？", vbYesNo + vbQuestion, "保存確認")
+
+    If userResponse = vbYes Then
+        Call SaveResultAsNewFile
+    End If
+
+    MsgBox "処理が完了しました。", vbInformation
+
+End Sub
+
+'----------------------------------------------
+' サブ: ImportCSV
+' 概要:
+'   指定したCSVファイルをUTF-8として取り込み、TargetSheetNameシートに配置する
+'----------------------------------------------
+Private Sub ImportCSV(ByVal filePath As String, ByVal TargetSheetName As String)
+
+    Dim ws As Worksheet
+
+    ' 既に同名シートがある場合は削除
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Worksheets(TargetSheetName).Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+
+    ' 新規シートを作成して名前を付与
+    Set ws = ThisWorkbook.Worksheets.Add
+    ws.Name = TargetSheetName
+
+    ' UTF-8でCSVをインポート(QueryTablesを使用)
+    With ws.QueryTables.Add(Connection:="TEXT;" & filePath, Destination:=ws.Range("A1"))
+        .TextFilePlatform = 65001               ' UTF-8
+        .TextFileStartRow = 1
+        .TextFileParseType = xlDelimited
+        .TextFileTextQualifier = xlTextQualifierDoubleQuote
+        .TextFileCommaDelimiter = True
+        .Refresh BackgroundQuery:=False
+    End With
+
+End Sub
+
+'----------------------------------------------
+' サブ: SaveResultAsNewFile
+' 概要:
+'   "Result"シートだけを新規ブックにコピーして保存する
+'----------------------------------------------
+Private Sub SaveResultAsNewFile()
+
+    Dim wsResult As Worksheet
+    On Error Resume Next
+    Set wsResult = ThisWorkbook.Worksheets("Result")
+    On Error GoTo 0
+
+    If wsResult Is Nothing Then
+        MsgBox "Resultシートが見つかりません。", vbExclamation
+        Exit Sub
+    End If
+
+    ' "Result"シートをコピーして新しいブックを作成
+    wsResult.Copy
+
+    ' 新しくアクティブになったブックを保存
+    Dim newWb As Workbook
+    Set newWb = ActiveWorkbook
+
+    Dim savePath As Variant
+    savePath = Application.GetSaveAsFilename( _
+        InitialFileName:="ComparisonResult.xlsx", _
+        FileFilter:="Excel Files (*.xlsx), *.xlsx")
+
+    If savePath <> False Then
+        newWb.SaveAs Filename:=savePath, FileFormat:=xlOpenXMLWorkbook
+        newWb.Close SaveChanges:=False
+        MsgBox "比較結果を保存しました。", vbInformation
+    Else
+        ' ユーザーがキャンセルした場合はブックを閉じるだけ
+        newWb.Close SaveChanges:=False
+        MsgBox "保存をキャンセルしました。", vbInformation
+    End If
+
+End Sub
 
 
 '*************************************
@@ -12,11 +121,10 @@ Option Explicit
 '*************************************
 Public Sub CompareOldAndNew()
 
-    ' 定数 (修正版)
+    ' 定数
     Const RED_BG As Long = 13027071     ' 赤
     Const BLUE_BG As Long = 15123099   ' 青
     Const PURPLE_BG As Long = 16750280 ' 紫
-
 
     ' ローカル変数
     Dim wsOld As Worksheet, wsNew As Worksheet, wsResult As Worksheet
@@ -29,12 +137,13 @@ Public Sub CompareOldAndNew()
     Set wsOld = ThisWorkbook.Worksheets("Old")
     Set wsNew = ThisWorkbook.Worksheets("New")
 
-    ' "Result" シート作成
+    ' "Result" シート作成 (既にあれば削除)
     On Error Resume Next
     Application.DisplayAlerts = False
     Worksheets("Result").Delete
     Application.DisplayAlerts = True
     On Error GoTo 0
+
     Set wsResult = ThisWorkbook.Worksheets.Add
     wsResult.Name = "Result"
 
@@ -139,33 +248,22 @@ Public Sub CompareOldAndNew()
 
     Wend
 
-
     wsResult.Columns.AutoFit
     MsgBox "比較が完了しました。", vbInformation
 
 End Sub
 
-
 '----------------------------------------------
 ' 関数: CreateCompareKey
-' 概要:
-'   渡された2次元配列の rowNum 行目から、比較用のキー文字列を生成する
-' 引数:
-'   - data_array (ByVal) : 元データ(2次元配列)
-'   - row_num (ByVal)    : 行番号(配列内の1-based)
-'   - last_col (ByVal)   : 列数
-' 戻り値:
-'   - String: 生成されたキー文字列
 '----------------------------------------------
 Private Function CreateCompareKey(ByVal data_array As Variant, _
                                   ByVal row_num As Long, _
                                   ByVal last_col As Long) As String
 
-    ' ローカル変数 (キャメルケース)
     Dim nameVal As String
     Dim controlVal As String
 
-    ' 例: Name列=2, ControlType列=4
+    ' 例: Name列=2, ControlType列=3 (※必要に応じて要調整)
     nameVal = CStr(data_array(row_num, 2))
     controlVal = CStr(data_array(row_num, 3))
 
@@ -186,14 +284,6 @@ End Function
 
 '----------------------------------------------
 ' 関数: GetRowArray
-' 概要:
-'   2次元配列 data_array の row_num 行目を1次元配列として返す
-' 引数:
-'   - data_array (ByVal) : 2次元配列
-'   - row_num (ByVal)    : 配列内行(1-based)
-'   - last_col (ByVal)   : 列数
-' 戻り値:
-'   - Variant() : 該当行の1次元配列
 '----------------------------------------------
 Private Function GetRowArray(ByVal data_array As Variant, _
                              ByVal row_num As Long, _
@@ -213,13 +303,6 @@ End Function
 
 '----------------------------------------------
 ' 関数: CompareArrays
-' 概要:
-'   2つの1次元配列の要素が全て等しいかどうか判定する
-' 引数:
-'   - arr1 (ByVal) : 1次元配列
-'   - arr2 (ByVal) : 1次元配列
-' 戻り値:
-'   - Boolean : True=一致 / False=不一致
 '----------------------------------------------
 Private Function CompareArrays(ByVal arr1 As Variant, ByVal arr2 As Variant) As Boolean
 
@@ -242,16 +325,6 @@ End Function
 
 '----------------------------------------------
 ' サブ: WriteResultRow
-' 概要:
-'   Resultシートの指定行(resultRow)に、Old/Status/New を書き込む
-' 引数:
-'   - ws_result (ByVal) : 出力先シート
-'   - result_row (ByVal): 書き込み先行
-'   - arr_old (ByVal)   : Old側1次元配列
-'   - arr_new (ByVal)   : New側1次元配列
-'   - status_str (ByVal): "一致" "変更" "追加" "削除" 等
-'   - last_col (ByVal)  : 列数
-' 戻り値: なし
 '----------------------------------------------
 Private Sub WriteResultRow(ByVal ws_result As Worksheet, _
                            ByVal result_row As Long, _
@@ -279,15 +352,6 @@ End Sub
 
 '----------------------------------------------
 ' サブ: HighlightDiffCells
-' 概要:
-'   Old/New 1次元配列の不一致セルを紫色に着色
-' 引数:
-'   - ws_result (ByVal)   : 着色先シート
-'   - result_row (ByVal)  : 着色行
-'   - arr_old (ByVal)     : Old側1次元配列
-'   - arr_new (ByVal)     : New側1次元配列
-'   - color_code (ByVal)  : 着色カラー
-'   - last_col (ByVal)    : 列数
 '----------------------------------------------
 Private Sub HighlightDiffCells(ByVal ws_result As Worksheet, _
                                ByVal result_row As Long, _
@@ -310,14 +374,6 @@ End Sub
 
 '----------------------------------------------
 ' サブ: ColorRow
-' 概要:
-'   指定行(resultRow)の、startCol～endCol 列を colorCode で塗りつぶす
-' 引数:
-'   - ws_result (ByVal) : 対象シート
-'   - result_row (ByVal): 行番号
-'   - start_col (ByVal) : 開始列
-'   - end_col (ByVal)   : 終了列
-'   - color_code (ByVal): 塗りつぶしカラー
 '----------------------------------------------
 Private Sub ColorRow(ByVal ws_result As Worksheet, _
                      ByVal result_row As Long, _
@@ -334,12 +390,6 @@ End Sub
 
 '----------------------------------------------
 ' 関数: EmptyArray
-' 概要:
-'   指定列数 colCount の要素をすべて "" とした1次元配列を返す
-' 引数:
-'   - col_count (ByVal): 列数
-' 戻り値:
-'   - Variant() : 要素がすべて空文字の1次元配列
 '----------------------------------------------
 Private Function EmptyArray(ByVal col_count As Long) As Variant
 
@@ -357,15 +407,6 @@ End Function
 
 '----------------------------------------------
 ' サブ: CopyHeader
-' 概要:
-'   Old/New シートのヘッダ1行目をResultにコピーし、
-'   その間に "Status" 列を挟む
-' 引数:
-'   - ws_old (ByVal)    : Oldシート
-'   - ws_new (ByVal)    : Newシート
-'   - ws_result (ByVal) : 出力先シート
-'   - last_col (ByVal)  : 列数
-' 戻り値: なし
 '----------------------------------------------
 Private Sub CopyHeader(ByVal ws_old As Worksheet, _
                        ByVal ws_new As Worksheet, _
