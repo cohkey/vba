@@ -6,48 +6,55 @@ Option Explicit
 Public Sub MainCompareProcedure()
 
     ' 実行用シート("Execution")のC2, C3からパスを取得
+    ' 実行用シート("Execution")のB2, B3から文字コード(utf-8 / shift-jis)を取得
     Dim wsExec As Worksheet
     Set wsExec = ThisWorkbook.Worksheets("Execution")
 
     Dim filePathOld As String
     Dim filePathNew As String
+    Dim encodeOld As String
+    Dim encodeNew As String
+
     filePathOld = wsExec.Range("C2").Value
     filePathNew = wsExec.Range("C3").Value
+    encodeOld = wsExec.Range("B2").Value
+    encodeNew = wsExec.Range("B3").Value
 
     If filePathOld = "" Or filePathNew = "" Then
         MsgBox "CSVのパスが入力されていません。ExecutionシートのC2, C3を確認してください。", vbExclamation
         Exit Sub
     End If
 
-    ' CSVを"Old"シート、"New"シートとしてUTF-8でインポート
-    Call ImportCSV(filePathOld, "Old")
-    Call ImportCSV(filePathNew, "New")
+    If encodeOld = "" Or encodeNew = "" Then
+        MsgBox "文字コードが入力されていません。ExecutionシートのB2, B3を確認してください。", vbExclamation
+        Exit Sub
+    End If
+
+    ' CSVを"Old"シート、"New"シートとして指定文字コードでインポート
+    Call ImportCSV(filePathOld, encodeOld, "Old")
+    Call ImportCSV(filePathNew, encodeNew, "New")
 
     ' 比較を実行(CompareOldAndNewは後述の既存コードを流用)
     Call CompareOldAndNew
 
-    ' 結果シート("Result")を新規ファイルとして保存するかを聞く
-    Dim userResponse As VbMsgBoxResult
-    userResponse = MsgBox("比較結果を新規Excelファイルとして保存しますか？", vbYesNo + vbQuestion, "保存確認")
+    ' 比較結果シート("Result")を新規ブックとして立ち上げる
+    Call OpenResultInNewWorkbook
 
-    If userResponse = vbYes Then
-        Call SaveResultAsNewFile
-    End If
-
-    MsgBox "処理が完了しました。", vbInformation
+    MsgBox "処理が完了しました。Resultシートを新規ブックで開いたので、必要に応じて手動で保存してください。", vbInformation
 
 End Sub
 
 '----------------------------------------------
 ' サブ: ImportCSV
 ' 概要:
-'   指定したCSVファイルをUTF-8として取り込み、TargetSheetNameシートに配置する
+'   指定したCSVファイルを指定文字コードで取り込み、TargetSheetNameシートに配置する
+'   文字コードは utf-8 / shift-jis から選択
 '----------------------------------------------
-Private Sub ImportCSV(ByVal filePath As String, ByVal TargetSheetName As String)
+Private Sub ImportCSV(ByVal filePath As String, ByVal encodeType As String, ByVal TargetSheetName As String)
 
     Dim ws As Worksheet
 
-    ' 既に同名シートがある場合は削除
+    ' 同名シートがある場合は削除
     On Error Resume Next
     Application.DisplayAlerts = False
     Worksheets(TargetSheetName).Delete
@@ -58,9 +65,17 @@ Private Sub ImportCSV(ByVal filePath As String, ByVal TargetSheetName As String)
     Set ws = ThisWorkbook.Worksheets.Add
     ws.Name = TargetSheetName
 
-    ' UTF-8でCSVをインポート(QueryTablesを使用)
+    ' .TextFilePlatformのコード取得(65001 = UTF-8, 932 = Shift-JIS)
+    Dim platformCode As Long
+    platformCode = GetPlatformCode(encodeType)
+    If platformCode = 0 Then
+        MsgBox "サポートされていない文字コードです。utf-8 または shift-jis を指定してください。", vbExclamation
+        Exit Sub
+    End If
+
+    ' QueryTablesを使用してCSVをインポート
     With ws.QueryTables.Add(Connection:="TEXT;" & filePath, Destination:=ws.Range("A1"))
-        .TextFilePlatform = 65001               ' UTF-8
+        .TextFilePlatform = platformCode       ' UTF-8(65001) or Shift-JIS(932)
         .TextFileStartRow = 1
         .TextFileParseType = xlDelimited
         .TextFileTextQualifier = xlTextQualifierDoubleQuote
@@ -71,11 +86,31 @@ Private Sub ImportCSV(ByVal filePath As String, ByVal TargetSheetName As String)
 End Sub
 
 '----------------------------------------------
-' サブ: SaveResultAsNewFile
+' 関数: GetPlatformCode
 ' 概要:
-'   "Result"シートだけを新規ブックにコピーして保存する
+'   文字列(utf-8 or shift-jis)からPlatformコードを返す
+'   該当しない場合は0を返す
 '----------------------------------------------
-Private Sub SaveResultAsNewFile()
+Private Function GetPlatformCode(ByVal encodeType As String) As Long
+
+    Select Case LCase(encodeType)
+        Case "utf-8", "utf8"
+            GetPlatformCode = 65001
+        Case "shift-jis", "sjis", "shift_jis"
+            GetPlatformCode = 932
+        Case Else
+            GetPlatformCode = 0
+    End Select
+
+End Function
+
+'----------------------------------------------
+' サブ: OpenResultInNewWorkbook
+' 概要:
+'   "Result"シートを新規ブックとしてコピーして開く
+'   保存はユーザーの手動オペレーションに委ねる
+'----------------------------------------------
+Private Sub OpenResultInNewWorkbook()
 
     Dim wsResult As Worksheet
     On Error Resume Next
@@ -88,27 +123,9 @@ Private Sub SaveResultAsNewFile()
     End If
 
     ' "Result"シートをコピーして新しいブックを作成
-    wsResult.Copy
+    wsResult.Copy  ' これにより自動的に新規ブックがアクティブになる
 
-    ' 新しくアクティブになったブックを保存
-    Dim newWb As Workbook
-    Set newWb = ActiveWorkbook
-
-    Dim savePath As Variant
-    savePath = Application.GetSaveAsFilename( _
-        InitialFileName:="ComparisonResult.xlsx", _
-        FileFilter:="Excel Files (*.xlsx), *.xlsx")
-
-    If savePath <> False Then
-        newWb.SaveAs Filename:=savePath, FileFormat:=xlOpenXMLWorkbook
-        newWb.Close SaveChanges:=False
-        MsgBox "比較結果を保存しました。", vbInformation
-    Else
-        ' ユーザーがキャンセルした場合はブックを閉じるだけ
-        newWb.Close SaveChanges:=False
-        MsgBox "保存をキャンセルしました。", vbInformation
-    End If
-
+    ' 以降の保存処理は行わず、ユーザーに任せる
 End Sub
 
 
@@ -263,7 +280,7 @@ Private Function CreateCompareKey(ByVal data_array As Variant, _
     Dim nameVal As String
     Dim controlVal As String
 
-    ' 例: Name列=2, ControlType列=3 (※必要に応じて要調整)
+    ' 例: Name列=2, ControlType列=3 (必要に応じて変更)
     nameVal = CStr(data_array(row_num, 2))
     controlVal = CStr(data_array(row_num, 3))
 
