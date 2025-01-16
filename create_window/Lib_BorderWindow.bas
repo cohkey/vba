@@ -85,16 +85,31 @@ Private Declare PtrSafe Function GetStockObject Lib "gdi32.dll" ( _
     ByVal nObject As Long) As LongPtr
 
 
-
+' ペンを作成(間接指定)
+Private Declare PtrSafe Function CreatePenIndirect Lib "gdi32.dll" ( _
+    ByRef lpLogPen As LOGPEN) As LongPtr
 
 'ウィンドウの座標を取得する関数
-Private Declare PtrSafe Function GetWindowRect Lib "user32" (ByVal hWnd As LongPtr, lpRect As Rect) As Long
+Private Declare PtrSafe Function GetWindowRect Lib "user32" (ByVal hWnd As LongPtr, lpRect As RECT) As Long
 
-Private Type Rect
+Private Type RECT
     left As Long
     top As Long
     right As Long
     bottom As Long
+End Type
+
+'POINTAPI構造体
+Public Type POINTAPI
+    x As Long
+    y As Long
+End Type
+
+'LOGPEN構造体
+Private Type LOGPEN
+    lopnStyle As Long
+    lopnWidth As POINTAPI
+    lopnColor As Long
 End Type
 
 '================================================================
@@ -233,7 +248,7 @@ Private Function ClearWindowBackground(Optional ByVal hwnd_ As LongPtr) As Boole
     End If
 
     '対象ウィンドウの座標を取得
-    Dim r As Rect
+    Dim r As RECT
     GetWindowRect hwnd_, r
 
     '対象ウィンドウのデバイスコンテキストを取得
@@ -270,7 +285,7 @@ End Function
 
 Private Function DrawWindowBorder(ByVal hwnd_ As LongPtr, Optional ByVal color_number As Long = 255) As Boolean
     '対象ウィンドウの座標を取得
-    Dim r As Rect
+    Dim r As RECT
 
     If hwnd_ = 0 Then
         Exit Function
