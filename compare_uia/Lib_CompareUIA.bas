@@ -161,7 +161,6 @@ Private Function MakeSheetNameSafe(ByVal rawName As String) As String
 End Function
 
 
-
 '******************************************************
 Public Sub CompareOldAndNew_VarThreshold( _
     ByRef wb As Workbook, _
@@ -209,17 +208,13 @@ Public Sub CompareOldAndNew_VarThreshold( _
 
     Dim oldRowArr() As Variant, newRowArr() As Variant
 
+    '【旧データ側のループ】
     For i = 1 To UBound(oldDataArr, 1)
-
         oldRowArr = GetRowArray(oldDataArr, i, lastCol)
-
-        ' FindBestMatchIndex
         Dim matchedIndex As Long
         matchedIndex = FindBestMatchIndex(oldRowArr, newDataArr, newMatched, matchThreshold)
-
         If matchedIndex > 0 Then
             newRowArr = GetRowArray(newDataArr, matchedIndex, lastCol)
-
             If CompareArrays(oldRowArr, newRowArr) Then
                 Call WriteResultRow(wsResult, resultRow, oldRowArr, newRowArr, "一致", lastCol)
             Else
@@ -231,10 +226,10 @@ Public Sub CompareOldAndNew_VarThreshold( _
             Call WriteResultRow(wsResult, resultRow, oldRowArr, EmptyArray(lastCol), "削除", lastCol)
             Call ColorRow(wsResult, resultRow, 1, lastCol, RED_BG)
         End If
-
         resultRow = resultRow + 1
     Next i
 
+    '【新データ側で未マッチの行を追加】
     Dim j As Long
     For j = 1 To UBound(newDataArr, 1)
         If Not newMatched(j) Then
@@ -246,7 +241,45 @@ Public Sub CompareOldAndNew_VarThreshold( _
     Next j
 
     wsResult.Columns.AutoFit
+
+    '==== ここからヘルパー列によるソート処理 ====
+
+    ' ヘルパー列の位置を決定（結果シートは：古いデータ: 1～lastCol, Status: lastCol+1, 新しいデータ: lastCol+2～lastCol*2+1）
+    ' ヘルパー列を追加する位置は、最後の列の右隣（例: lastCol*2+2）
+    Dim helperCol As Long
+    helperCol = lastCol * 2 + 2
+
+    Dim r As Long
+    For r = 2 To resultRow - 1
+        Dim levelValue As Variant
+        ' ステータスが「追加」の場合は、旧データ側は空なので、新しいデータ側（列 lastCol+2）の値を使用
+        If wsResult.Cells(r, lastCol + 1).Value = "追加" Then
+            levelValue = wsResult.Cells(r, lastCol + 2).Value
+        Else
+            levelValue = wsResult.Cells(r, 1).Value
+        End If
+        wsResult.Cells(r, helperCol).Value = levelValue
+    Next r
+
+    ' ヘッダー行にも「Level」項目名を付与（ヘッダーは1行目）
+    wsResult.Cells(1, helperCol).Value = "SortLevel"
+
+    ' 結果シート全体を、ヘルパー列（SortLevel）をキーにして昇順ソート
+    With wsResult.Sort
+        .SortFields.Clear
+        .SortFields.Add Key:=wsResult.Range(wsResult.Cells(2, helperCol), wsResult.Cells(resultRow - 1, helperCol)), _
+                        SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+        .SetRange wsResult.Range(wsResult.Cells(1, 1), wsResult.Cells(resultRow - 1, helperCol))
+        .Header = xlYes
+        .Apply
+    End With
+
+    ' ※必要ならヘルパー列を非表示にする
+    wsResult.Columns(helperCol).Hidden = True
+    '==== ここまでソート処理 ====
+
 End Sub
+
 
 '******************************************************
 ' FindBestMatchIndex
