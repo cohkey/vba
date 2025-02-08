@@ -24,20 +24,12 @@ Public Sub MainCompareProcedure()
 
     Dim filePathOld As String
     Dim filePathNew As String
-    Dim encodeOld As String
-    Dim encodeNew As String
 
     filePathOld = wsExec.Range("C2").Value
     filePathNew = wsExec.Range("C3").Value
-    encodeOld = wsExec.Range("B2").Value
-    encodeNew = wsExec.Range("B3").Value
 
     If filePathOld = "" Or filePathNew = "" Then
-        MsgBox "CSVのパスが未入力です。ExecutionシートのC2, C3を確認してください。", vbExclamation
-        Exit Sub
-    End If
-    If encodeOld = "" Or encodeNew = "" Then
-        MsgBox "文字コードが未入力です。ExecutionシートのB2, B3を確認してください。", vbExclamation
+        MsgBox "Excelファイルのパスが未入力です。ExecutionシートのC2, C3を確認してください。", vbExclamation
         Exit Sub
     End If
 
@@ -45,10 +37,22 @@ Public Sub MainCompareProcedure()
     Dim wbCompare As Workbook
     Set wbCompare = Workbooks.Add(xlWBATWorksheet)  ' 新規ブック(1シート)
 
-    ' CSVファイル名からシート名生成
+    ' ファイル名からシート名生成（不正文字の変換も実施）
+    Dim rawOldName As String, rawNewName As String
+    rawOldName = MakeSheetNameSafe(GetFileName(filePathOld))
+    rawNewName = MakeSheetNameSafe(GetFileName(filePathNew))
+
     Dim oldSheetName As String, newSheetName As String
-    oldSheetName = "Old_" & MakeSheetNameSafe(GetFileName(filePathOld))
-    newSheetName = "New_" & MakeSheetNameSafe(GetFileName(filePathNew))
+    oldSheetName = "Old_" & rawOldName
+    newSheetName = "New_" & rawNewName
+
+    ' Excelのシート名は31文字までのため、超えている場合は先頭31文字に切り詰める
+    If Len(oldSheetName) > 31 Then
+        oldSheetName = Left(oldSheetName, 31)
+    End If
+    If Len(newSheetName) > 31 Then
+        newSheetName = Left(newSheetName, 31)
+    End If
 
     ' 既定で存在するシートを "Result" に
     Dim wsTemp As Worksheet
@@ -63,9 +67,9 @@ Public Sub MainCompareProcedure()
     Set wsNew = wbCompare.Worksheets.Add(After:=wsOld)
     wsNew.Name = newSheetName
 
-    ' 2) CSVインポート
-    Call ImportCSV(filePathOld, encodeOld, wbCompare, oldSheetName)
-    Call ImportCSV(filePathNew, encodeNew, wbCompare, newSheetName)
+    ' 2) Excelファイルインポート（※最初のシートを選択）
+    Call ImportExcelData(filePathOld, wbCompare, oldSheetName)
+    Call ImportExcelData(filePathNew, wbCompare, newSheetName)
 
     ' 3) 比較(例: 閾値=0.4 → 40%)
     Dim threshold As Double
@@ -78,58 +82,45 @@ Public Sub MainCompareProcedure()
 
 End Sub
 
-'----------------------------------------------
-Private Sub ImportCSV(ByVal filePath As String, _
-                      ByVal encodeType As String, _
-                      ByRef wbTarget As Workbook, _
-                      ByVal targetSheetName As String)
 
-    Dim ws As Worksheet
+'----------------------------------------------
+' Excelファイルから1つ目のシートのデータを指定シートにコピーする
+'----------------------------------------------
+Private Sub ImportExcelData(ByVal filePath As String, _
+                            ByRef wbTarget As Workbook, _
+                            ByVal targetSheetName As String)
+
+    Dim wsTarget As Worksheet
     On Error Resume Next
-    Set ws = wbTarget.Worksheets(targetSheetName)
+    Set wsTarget = wbTarget.Worksheets(targetSheetName)
     On Error GoTo 0
 
-    If ws Is Nothing Then
-        MsgBox "ImportCSV: " & targetSheetName & " シートが見つかりません。", vbExclamation
+    If wsTarget Is Nothing Then
+        MsgBox "ImportExcelData: " & targetSheetName & " シートが見つかりません。", vbExclamation
         Exit Sub
     End If
 
-    Dim platformCode As Long
-    platformCode = GetPlatformCode(encodeType)
-    If platformCode = 0 Then
-        MsgBox "サポート外の文字コードです。utf-8 or shift-jis を指定してください。", vbExclamation
+    Dim wbSource As Workbook
+    On Error Resume Next
+    Set wbSource = Workbooks.Open(filePath, ReadOnly:=True)
+    On Error GoTo 0
+    If wbSource Is Nothing Then
+        MsgBox "ImportExcelData: ファイルを開けませんでした。 " & filePath, vbExclamation
         Exit Sub
     End If
 
-    Dim qt As QueryTable
-    For Each qt In ws.QueryTables
-        qt.Delete
-    Next qt
+    Dim wsSource As Worksheet
+    Set wsSource = wbSource.Worksheets(1) ' 1つ目のシートを選択
 
-    With ws.QueryTables.Add(Connection:="TEXT;" & filePath, Destination:=ws.Range("A1"))
-        .TextFilePlatform = platformCode
-        .TextFileStartRow = 1
-        .TextFileParseType = xlDelimited
-        .TextFileTextQualifier = xlTextQualifierDoubleQuote
-        .TextFileCommaDelimiter = True
-        .Refresh BackgroundQuery:=False
-    End With
+    ' ソースのUsedRangeをコピーして、対象シートのA1セルに貼り付け
+    wsSource.UsedRange.Copy Destination:=wsTarget.Range("A1")
 
+    wbSource.Close SaveChanges:=False
 End Sub
 
-Private Function GetPlatformCode(ByVal encodeType As String) As Long
-
-    Select Case LCase(encodeType)
-        Case "utf-8", "utf8"
-            GetPlatformCode = 65001
-        Case "shift-jis", "sjis", "shift_jis"
-            GetPlatformCode = 932
-        Case Else
-            GetPlatformCode = 0
-    End Select
-
-End Function
-
+'----------------------------------------------
+' 以下、残りは元のコード（GetFileName, MakeSheetNameSafe, 比較処理など）
+'----------------------------------------------
 Private Function GetFileName(ByVal fullPath As String) As String
     Dim fName As String
     fName = fullPath
@@ -159,14 +150,17 @@ Private Function MakeSheetNameSafe(ByVal rawName As String) As String
         tmp = Replace(tmp, c, "")
     Next c
 
-    If Len(tmp) > 31 Then
-        tmp = Left(tmp, 31)
-    End If
+    ' ピリオドはシート名に使用できないのでアンダースコアに変換
+    tmp = Replace(tmp, ".", "_")
 
+    ' 空文字になってしまった場合の代替文字列
     If tmp = "" Then tmp = "Sheet"
 
+    ' ※ここではトリミングは行わず、Mainでプレフィックスを付けた後に全体の長さをチェックします。
     MakeSheetNameSafe = tmp
 End Function
+
+
 
 '******************************************************
 Public Sub CompareOldAndNew_VarThreshold( _
@@ -186,8 +180,8 @@ Public Sub CompareOldAndNew_VarThreshold( _
     Set wsResult = wb.Worksheets(resultSheetName)
 
     Dim lastRowOld As Long, lastRowNew As Long, lastCol As Long
-    lastRowOld = wsOld.Cells(wsOld.Rows.Count, 1).End(xlUp).row
-    lastRowNew = wsNew.Cells(wsNew.Rows.Count, 1).End(xlUp).row
+    lastRowOld = wsOld.Cells(wsOld.Rows.Count, 1).End(xlUp).Row
+    lastRowNew = wsNew.Cells(wsNew.Rows.Count, 1).End(xlUp).Row
     lastCol = wsOld.Cells(1, wsOld.Columns.Count).End(xlToLeft).Column
 
     wsResult.Cells.Clear
