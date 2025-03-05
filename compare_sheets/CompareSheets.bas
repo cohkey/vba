@@ -1,25 +1,30 @@
-Sub CompareSheets(ws1 As Worksheet, ws2 As Worksheet)
+Sub CompareSheets(ws1 As Worksheet, ws2 As Worksheet, ParamArray rngList() As Variant)
     Dim lastRow1 As Long, lastRow2 As Long, lastRow As Long
-    Dim diffCount1 As Variant, diffCount2 As Variant, diffCount As Variant
+    Dim diffCount As Long
+    Dim i As Long
     Dim sh1Name As String, sh2Name As String
+    Dim evalFormula As String
 
-    ' 各シートのA列の最終行を取得し、短い方を採用（比較範囲の終了行）
+    ' 各シートのA列の最終行を取得し、短い方を比較対象の終了行とする
     lastRow1 = ws1.Cells(ws1.Rows.Count, "A").End(xlUp).Row
     lastRow2 = ws2.Cells(ws2.Rows.Count, "A").End(xlUp).Row
     lastRow = Application.WorksheetFunction.Min(lastRow1, lastRow2)
 
-    ' シート名にスペースが含まれている場合に備え、シングルクォーテーションで囲む
+    ' シート名にスペースが含まれる可能性を考慮してシングルクォーテーションで囲む
     sh1Name = "'" & ws1.Name & "'"
     sh2Name = "'" & ws2.Name & "'"
 
-    ' EvaluateとSUMPRODUCTでA列〜B列（3行目以降）の差異をカウント
-    diffCount1 = Evaluate("SUMPRODUCT(--(" & sh1Name & "!A3:B" & lastRow & "<>" & sh2Name & "!A3:B" & lastRow & "))")
+    diffCount = 0
 
-    ' 同様に、F列〜H列（3行目以降）の差異をカウント
-    diffCount2 = Evaluate("SUMPRODUCT(--(" & sh1Name & "!F3:H" & lastRow & "<>" & sh2Name & "!F3:H" & lastRow & "))")
-
-    ' 両方の差異を合計
-    diffCount = diffCount1 + diffCount2
+    ' ParamArrayで渡された各範囲に対してループ処理
+    ' 各rngList(i)は例として "A3:B" や "F3:H" のように指定
+    For i = LBound(rngList) To UBound(rngList)
+        ' Evaluate用の文字列を作成
+        evalFormula = "SUMPRODUCT(--(" & sh1Name & "!" & rngList(i) & lastRow & _
+                      "<>" & sh2Name & "!" & rngList(i) & lastRow & "))"
+        ' Evaluateで差分をカウントして加算
+        diffCount = diffCount + Evaluate(evalFormula)
+    Next i
 
     ' 結果の表示
     If diffCount = 0 Then
