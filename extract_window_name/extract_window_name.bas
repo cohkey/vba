@@ -1,5 +1,6 @@
 Option Explicit
 
+
 Function ExtractEdgeTitle(ByVal windowTitle As String) As String
     Dim posYobi As Long, posShokuba As Long, posCut As Long
 
