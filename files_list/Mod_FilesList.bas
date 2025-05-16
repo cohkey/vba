@@ -1,7 +1,7 @@
 Option Explicit
 
 '--------------------------------------------------
-' 機能: "指定拡張子のファイルを再帰的に収集し、ログ出力とコピーを行う"
+' 機能: "指定拡張子のファイルを再帰的に収集し、ログ出力とコピーを高速に行う"
 ' 引数: "srcRoot - 探索元ルートフォルダのフルパス; dstRoot - コピー先ルートフォルダのフルパス; fileExts - 拡張子配列(例: Array(\"pdf\",\"txt\")、小文字、ドット無し); overwrite - 既存ファイルを上書きするか(既定 True)"
 ' 返値: "なし"
 '--------------------------------------------------
@@ -12,60 +12,87 @@ Public Sub CopyFilesByExt(
     Optional ByVal overwrite As Boolean = True)
 
     Dim fso As FileSystemObject
-    Set fso = New FileSystemObject
+    Dim extDict As Dictionary
+    Dim fileList As Collection
+    Dim rootLen As Long
 
+    ' パフォーマンス最適化: 画面更新・計算を停止
+    With Application
+        .ScreenUpdating = False
+        .EnableEvents = False
+        .Calculation = xlCalculationManual
+    End With
+
+    ' FSO と拡張子辞書の初期化
+    Set fso = New FileSystemObject
+    Set extDict = New Dictionary
+    Dim ext As Variant
+    For Each ext In fileExts
+        extDict.Add ext, True
+    Next ext
+
+    ' ルートフォルダ存在チェック
     If Not fso.FolderExists(srcRoot) Then
-        Err.Raise ERR_SOURCE_NOT_FOUND, "CopyFilesByExt", "Source folder not found: " & srcRoot
+        Err.Raise vbObjectError + 513, "CopyFilesByExt", _
+                  "Source folder not found: " & srcRoot
     End If
 
-    Dim fileList As Collection
+    ' 相対パス算出用の長さ
+    rootLen = Len(srcRoot) + 2   ' パス区切り文字分
+
     Set fileList = New Collection
-    CollectFilesRec fso, srcRoot, dstRoot, srcRoot, fileExts, fileList
+    CollectFilesRec fso, srcRoot, dstRoot, rootLen, extDict, fileList
 
     LogFileList fileList
     CopyFromList fso, fileList, overwrite
 
+    ' 後処理: パフォーマンス設定復元
+    With Application
+        .Calculation = xlCalculationAutomatic
+        .EnableEvents = True
+        .ScreenUpdating = True
+    End With
+
+    Set extDict = Nothing
     Set fso = Nothing
 End Sub
 
 '--------------------------------------------------
 ' 機能: "currentFolder以下を再帰的にスキャンし、対象拡張子のファイル情報を fileList に追加する"
-' 引数: "fso - FileSystemObject; currentFolder - 現在のフォルダパス; dstRoot - コピー先ルートフォルダ; srcRoot - 探索元ルートフォルダ; fileExts - 拡張子配列; fileList - Collection(Array(sourceFolder, targetFolder, fileName))"
+' 引数: "fso - FileSystemObject; currentFolder - 現在のフォルダパス; dstRoot - コピー先ルートフォルダ; rootLen - srcRoot を除去する文字数; extDict - 対象拡張子の辞書; fileList - Collection(要素: Array(sourceFolder, targetFolder, fileName))"
 ' 返値: "なし"
 '--------------------------------------------------
 Private Sub CollectFilesRec(
     ByVal fso As FileSystemObject,
     ByVal currentFolder As String,
     ByVal dstRoot As String,
-    ByVal srcRoot As String,
-    ByVal fileExts As Variant,
+    ByVal rootLen As Long,
+    ByVal extDict As Dictionary,
     ByRef fileList As Collection)
 
     Dim folderItem As Folder
     Set folderItem = fso.GetFolder(currentFolder)
 
     Dim fileItem As File, subFolder As Folder
-    Dim relPath As String, targetFolder As String, ext As String
-    Dim i As Long
+    Dim relPath As String, targetFolder As String, extName As String
 
+    ' ファイルのスキャン
     For Each fileItem In folderItem.Files
-        ext = LCase$(fso.GetExtensionName(fileItem.Name))
-        For i = LBound(fileExts) To UBound(fileExts)
-            If ext = fileExts(i) Then
-                relPath = Replace(folderItem.Path, srcRoot & "\", "")
-                If relPath <> "" Then
-                    targetFolder = dstRoot & "\" & relPath
-                Else
-                    targetFolder = dstRoot
-                End If
-                fileList.Add Array(folderItem.Path, targetFolder, fileItem.Name)
-                Exit For
+        extName = LCase$(fso.GetExtensionName(fileItem.Name))
+        If extDict.Exists(extName) Then
+            relPath = Mid$(folderItem.Path, rootLen)
+            If Len(relPath) > 0 Then
+                targetFolder = dstRoot & "\" & relPath
+            Else
+                targetFolder = dstRoot
             End If
-        Next i
+            fileList.Add Array(folderItem.Path, targetFolder, fileItem.Name)
+        End If
     Next fileItem
 
+    ' サブフォルダの再帰
     For Each subFolder In folderItem.SubFolders
-        CollectFilesRec fso, subFolder.Path, dstRoot, srcRoot, fileExts, fileList
+        CollectFilesRec fso, subFolder.Path, dstRoot, rootLen, extDict, fileList
     Next subFolder
 End Sub
 
@@ -79,34 +106,31 @@ Private Sub LogFileList(
 
     Dim ws As Worksheet
     On Error Resume Next
-    Set ws = ThisWorkbook.Worksheets("Log")
+    Set ws = ThisWorkbook.Sheets("Log")
     If ws Is Nothing Then
-        Set ws = ThisWorkbook.Worksheets.Add
+        Set ws = ThisWorkbook.Sheets.Add
         ws.Name = "Log"
     Else
         ws.Cells.Clear
     End If
     On Error GoTo 0
 
-    ' ヘッダー出力
+    ' ヘッダー
     ws.Range("A1:C1").Value = Array("InputFolder", "OutputFolder", "FileName")
     ws.Range("A1:C1").Font.Bold = True
 
-    Dim countRows As Long
-    countRows = fileList.Count
-    If countRows > 0 Then
-        Dim dataArr As Variant
-        ReDim dataArr(1 To countRows, 1 To 3)
-        Dim i As Long
-        For i = 1 To countRows
-            Dim item As Variant
-            item = fileList(i)
-            dataArr(i, 1) = CStr(item(0))
-            dataArr(i, 2) = CStr(item(1))
-            dataArr(i, 3) = CStr(item(2))
+    Dim n As Long: n = fileList.Count
+    If n > 0 Then
+        Dim dataArr() As String
+        ReDim dataArr(1 To n, 1 To 3)
+        Dim i As Long, itm As Variant
+        For i = 1 To n
+            itm = fileList(i)
+            dataArr(i, 1) = itm(0)
+            dataArr(i, 2) = itm(1)
+            dataArr(i, 3) = itm(2)
         Next i
-
-        With ws.Range("A2").Resize(countRows, 3)
+        With ws.Range("A2").Resize(n, 3)
             .NumberFormat = "@"
             .Value = dataArr
         End With
@@ -126,17 +150,11 @@ Private Sub CopyFromList(
     ByVal overwrite As Boolean)
 
     Dim item As Variant
-    Dim sourceFolder As String, outputFolder As String, fileName As String
-
     For Each item In fileList
-        sourceFolder = item(0)
-        outputFolder = item(1)
-        fileName = item(2)
-
-        EnsureFolderExists fso, outputFolder
-        fso.CopyFile Source:= sourceFolder & "\" & fileName, _
-                     Destination:= outputFolder & "\" & fileName, _
-                     OverWriteFiles:= overwrite
+        EnsureFolderExists fso, item(1)
+        fso.CopyFile Source:=item(0) & "\" & item(2), _
+                     Destination:=item(1) & "\" & item(2), _
+                     OverWriteFiles:=overwrite
     Next item
 End Sub
 
@@ -150,9 +168,9 @@ Private Sub EnsureFolderExists(
     ByVal folderPath As String)
 
     If fso.FolderExists(folderPath) Then Exit Sub
-    Dim parentPath As String
-    parentPath = fso.GetParentFolderName(folderPath)
-    If parentPath <> "" Then EnsureFolderExists fso, parentPath
+    Dim p As String
+    p = fso.GetParentFolderName(folderPath)
+    If Len(p) > 0 Then EnsureFolderExists fso, p
     fso.CreateFolder folderPath
 End Sub
 
@@ -162,8 +180,7 @@ End Sub
 ' 返値: "なし"
 '--------------------------------------------------
 Private Sub TestCopyByExt()
-    Dim src As String, dst As String, exts As Variant
-    src = "C:\Source": dst = "D:\Dest"
+    Dim exts As Variant
     exts = Array("pdf", "txt", "xlsx")
-    CopyFilesByExt src, dst, exts, True
+    CopyFilesByExt "C:\Source", "D:\Dest", exts, True
 End Sub
