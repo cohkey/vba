@@ -1,295 +1,120 @@
 Option Explicit
 
 Private Sub TestSearchKeywordInModules()
-    Dim folderPath As String, keyword As String
-    folderPath = "C:\path\to\YourMacroBookFolder"
+    Dim exportFolder As String, keyword As String
+    exportFolder = "C:\path\to\ExportedModules"
     keyword = "Keyword"
 
-'    Call ExportSearchResultsToSheet(wbPath, keyword)
-    Call ExportFolderSearchAndSummary(folderPath, keyword, True)
-End Sub
-
-
-'--------------------------------------------------
-' 指定フォルダ内のマクロファイルを
-' ・SearchResults シートに行単位で出力
-' ・Summary シートにファイル/モジュール単位でヒット数を集計
-'
-' 引数:
-'   folder_path    : 対象フォルダのパス
-'   search_keyword : 検索文字列
-'   case_sensitive : True=大文字小文字区別, False=非区別 (省略可)
-'--------------------------------------------------
-Public Sub ExportFolderSearchAndSummary( _
-    ByVal folder_path As String, _
-    ByVal search_keyword As String, _
-    Optional ByVal case_sensitive As Boolean = False _
-)
-    Dim wsDetail    As Worksheet
-    Dim wsSummary   As Worksheet
-    Dim fileName    As String
-    Dim filePath    As String
-    Dim foundColl   As Collection
-    Dim summaryColl As Collection: Set summaryColl = New Collection
-    Dim currentRow  As Long
-    Dim currentTs   As String
-
-    '── SearchResults シート準備 ──
-    On Error Resume Next
-    Application.DisplayAlerts = False
-      ThisWorkbook.Worksheets("SearchResults").Delete
-      ThisWorkbook.Worksheets("Summary").Delete
-    Application.DisplayAlerts = True
-    On Error GoTo 0
-
-    ' ← After にはオブジェクトを渡す
-    Set wsDetail = ThisWorkbook.Worksheets.Add( _
-        After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count) _
-    )
-    wsDetail.Name = "SearchResults"
-    wsDetail.Range("A1:K1").Value = Array( _
-        "検索キーワード", "結果", "エラー内容", "タイムスタンプ", _
-        "ファイルパス", "ファイル名", "モジュール名", _
-        "モジュール種類", "プロシージャ名", "行番号", "コード内容" _
-    )
-    currentRow = 2
-
-    '── フォルダ内ループ ──
-    fileName = Dir(folder_path & "\*.*")
-    Do While fileName <> ""
-        filePath = folder_path & "\" & fileName
-
-        If LCase$(Right$(fileName, 5)) = ".xlsm" _
-        Or LCase$(Right$(fileName, 5)) = ".xlsb" _
-        Or LCase$(Right$(fileName, 4)) = ".xls" _
-        Or LCase$(Right$(fileName, 5)) = ".xlam" Then
-
-            currentTs = Format(Now, "yyyy-mm-dd hh:nn:ss")
-            On Error Resume Next
-            Set foundColl = FindModulesByKeywordInFile( _
-                filePath, search_keyword, case_sensitive _
-            )
-            If Err.Number <> 0 Then
-                With wsDetail
-                    .Cells(currentRow, 1).Value = search_keyword
-                    .Cells(currentRow, 2).Value = "Error"
-                    .Cells(currentRow, 3).Value = Err.Description
-                    .Cells(currentRow, 4).Value = currentTs
-                    .Cells(currentRow, 5).Value = filePath
-                    .Cells(currentRow, 6).Value = fileName
-                End With
-                summaryColl.Add Array(filePath, fileName, "", 0, Err.Description)
-                Err.Clear
-                currentRow = currentRow + 1
-            Else
-                ' 全モジュール名の取得
-                Dim tmpWb      As Workbook
-                Dim comp       As VBIDE.VBComponent
-                Dim allModules As Collection: Set allModules = New Collection
-                Dim extName    As String
-
-                Set tmpWb = Application.Workbooks.Open( _
-                    fileName:=filePath, ReadOnly:=True _
-                )
-                For Each comp In tmpWb.VBProject.VBComponents
-                    Select Case comp.Type
-                    Case vbext_ct_StdModule:   extName = ".bas"
-                    Case vbext_ct_ClassModule: extName = ".cls"
-                    Case vbext_ct_MSForm:      extName = ".frm"
-                    Case Else:                 extName = ""
-                    End Select
-                    If extName <> "" Then allModules.Add comp.Name & extName
-                Next
-                tmpWb.Close SaveChanges:=False
-
-                ' Detail 出力
-                If foundColl.Count > 0 Then
-                    Dim resultItem As Variant
-                    For Each resultItem In foundColl
-                        Dim moduleType As String
-                        moduleType = Mid$( _
-                            resultItem(1), InStrRev(resultItem(1), ".") + 1 _
-                        )
-                        With wsDetail
-                            .Cells(currentRow, 1).Value = search_keyword
-                            .Cells(currentRow, 2).Value = "OK"
-                            .Cells(currentRow, 3).Value = ""
-                            .Cells(currentRow, 4).Value = currentTs
-                            .Cells(currentRow, 5).Value = resultItem(0)
-                            .Cells(currentRow, 6).Value = fileName
-                            .Cells(currentRow, 7).Value = resultItem(1)
-                            .Cells(currentRow, 8).Value = moduleType
-                            .Cells(currentRow, 9).Value = resultItem(2)
-                            .Cells(currentRow, 10).Value = resultItem(3)
-                            .Cells(currentRow, 11).Value = resultItem(4)
-                        End With
-                        currentRow = currentRow + 1
-                    Next
-                Else
-                    With wsDetail
-                        .Cells(currentRow, 1).Value = search_keyword
-                        .Cells(currentRow, 2).Value = "OK"
-                        .Cells(currentRow, 3).Value = "No hits"
-                        .Cells(currentRow, 4).Value = currentTs
-                        .Cells(currentRow, 5).Value = filePath
-                        .Cells(currentRow, 6).Value = fileName
-                    End With
-                    currentRow = currentRow + 1
-                End If
-
-                ' Summary 用ヒット数集計
-                Dim dictHits As Object: Set dictHits = CreateObject("Scripting.Dictionary")
-                Dim mName As Variant
-                For Each mName In allModules: dictHits(mName) = 0: Next
-                For Each resultItem In foundColl
-                    dictHits(resultItem(1)) = dictHits(resultItem(1)) + 1
-                Next
-                For Each mName In dictHits.Keys
-                    summaryColl.Add Array(filePath, fileName, mName, dictHits(mName), "")
-                Next
-            End If
-            On Error GoTo 0
-        End If
-        fileName = Dir()
-    Loop
-
-    '── Summary シート出力 ──
-    Set wsSummary = ThisWorkbook.Worksheets.Add( _
-        After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count) _
-    )
-    wsSummary.Name = "Summary"
-    wsSummary.Range("A1:E1").Value = Array( _
-        "ファイルパス", "ファイル名", "モジュール名", "ヒット件数", "エラー内容" _
-    )
-    Dim i As Long
-    For i = 1 To summaryColl.Count
-        wsSummary.Cells(i + 1, 1).Resize(1, 5).Value = summaryColl(i)
-    Next
-    wsSummary.Columns("A:E").AutoFit
-    wsDetail.Columns("A:K").AutoFit
-
-    MsgBox "SearchResults と Summary の出力が完了しました。", vbInformation
+    ' モジュールを先にエクスポート
+    Call ExportAllModulesFromFolder("C:\path\to\MacroBooks", exportFolder)
+    ' エクスポート済みモジュールを検索
+    Call SearchExportedModulesAndSummary(exportFolder, keyword, True)
 End Sub
 
 
 
-
-
-
 '--------------------------------------------------
-' 機能  : 検索結果を二次元配列にまとめ、
-'         新規シートへヘッダー付きで貼り付ける
-' 引数  : ByVal file_path      - マクロファイルのフルパス
-'         ByVal search_keyword - 検索する文字列
+' Sub  : ExportAllModulesFromFolder
+' 機能  : 指定フォルダ内のマクロブックを開き、すべてのモジュールをエクスポート
+' 引数  : ByVal source_folder As String - マクロブック格納フォルダ
+'        : ByVal export_folder As String - モジュール出力先基底フォルダ
 ' 戻値  : なし
 '--------------------------------------------------
-Public Sub ExportSearchResultsToSheet( _
-    ByVal file_path As String, _
-    ByVal search_keyword As String _
-)
+Public Sub ExportAllModulesFromFolder(ByVal source_folder As String, ByVal export_folder As String)
+    On Error GoTo ErrHandler
+    Dim fso As Object
+    Dim folderItem As Object
+    Dim fileItem As Object
+    Dim wbPath As String
+    Dim targetWb As Workbook
+    Dim comp As VBIDE.VBComponent
+    Dim baseName As String
+    Dim outFolder As String
+    Dim ext As String
 
-    Dim foundColl     As Collection
-    Dim resultItem    As Variant
-    Dim resultArr     As Variant
-    Dim i             As Long
-    Dim rowCount      As Long
-    Dim colCount      As Long
-    Dim ws            As Worksheet
+    ' FileSystemObject を作成
+    Set fso = CreateObject("Scripting.FileSystemObject")
 
-    ' 検索実行
-    Set foundColl = FindModulesByKeywordInFile( _
-        file_path, _
-        search_keyword _
-    )
+    ' パス末尾の"\"を保証 (プラットフォーム依存文字を使用)
+    If Right$(source_folder, 1) <> Application.PathSeparator Then source_folder = source_folder & Application.PathSeparator
+    If Right$(export_folder, 1) <> Application.PathSeparator Then export_folder = export_folder & Application.PathSeparator
 
-    rowCount = foundColl.Count
+    ' エクスポート先フォルダ作成（なければ）
+    If Not fso.FolderExists(export_folder) Then fso.CreateFolder export_folder
 
-    If rowCount = 0 Then
-        MsgBox "キーワード「" & search_keyword & "」は見つかりませんでした。"
-        Exit Sub
+    ' 既存サブフォルダがあればエラー終了
+    If fso.GetFolder(export_folder).SubFolders.Count > 0 Then
+        MsgBox "エクスポート先フォルダに既存のサブフォルダが存在します。処理を中止します。", vbCritical
+        GoTo CleanExit
     End If
 
-    ' 生成する配列の行数＝ヒット件数＋1（ヘッダー用）、列数＝5
-    colCount = 5
-    ReDim resultArr(1 To rowCount + 1, 1 To colCount)
+    ' 指定フォルダ内のファイルをループ
+    Set folderItem = fso.GetFolder(source_folder)
+    For Each fileItem In folderItem.Files
+        Select Case LCase(fso.GetExtensionName(fileItem.Name))
+            Case "xls", "xlsx", "xlsm"
+                wbPath = fileItem.Path
+                Set targetWb = Application.Workbooks.Open(fileName:=wbPath, ReadOnly:=True)
 
-    ' ヘッダーをセット
-    resultArr(1, 1) = "ファイルパス"
-    resultArr(1, 2) = "モジュール名"
-    resultArr(1, 3) = "プロシージャ名"
-    resultArr(1, 4) = "行番号"
-    resultArr(1, 5) = "コード内容"
+                ' サブフォルダ名＝ブック名（拡張子除く）
+                baseName = Left$(fileItem.Name, InStrRev(fileItem.Name, ".") - 1)
+                outFolder = export_folder & baseName & Application.PathSeparator
+                If Not fso.FolderExists(outFolder) Then fso.CreateFolder outFolder
 
-    ' データ行をセット
-    For i = 1 To rowCount
-        resultItem = foundColl(i)
-        resultArr(i + 1, 1) = resultItem(0)
-        resultArr(i + 1, 2) = resultItem(1)
-        resultArr(i + 1, 3) = resultItem(2)
-        resultArr(i + 1, 4) = resultItem(3)
-        resultArr(i + 1, 5) = resultItem(4)
-    Next i
+                ' 各コンポーネントをエクスポート
+                For Each comp In targetWb.VBProject.VBComponents
+                    Select Case comp.Type
+                        Case vbext_ct_StdModule:     ext = ".bas"
+                        Case vbext_ct_ClassModule:   ext = ".cls"
+                        Case vbext_ct_MSForm:        ext = ".frm"
+                        Case Else:                   ext = ""
+                    End Select
+                    If ext <> "" Then comp.Export outFolder & comp.Name & ext
+                Next comp
 
-    ' 新規シート作成（既存なら削除してから）
-    On Error Resume Next
-    Application.DisplayAlerts = False
-    Call ThisWorkbook.Worksheets("SearchResults").Delete
-    Application.DisplayAlerts = True
-    On Error GoTo 0
+                targetWb.Close SaveChanges:=False
+        End Select
+    Next fileItem
 
-    Set ws = ThisWorkbook.Worksheets.Add( _
-        After:=ThisWorkbook.Worksheets( _
-            ThisWorkbook.Worksheets.Count) _
-    )
-    ws.Name = "SearchResults"
+    MsgBox "モジュールのエクスポートが完了しました。", vbInformation
 
-    ' 配列をシートに貼り付け
-    ws.Range(ws.Cells(1, 1), _
-        ws.Cells(rowCount + 1, colCount) _
-    ).Value = resultArr
+CleanExit:
+    Exit Sub
 
-    ' 列幅を自動調整
-    ws.Columns("A:E").AutoFit
-
-    MsgBox "シート 'SearchResults' に " & rowCount & " 件を出力しました。"
-
+ErrHandler:
+    MsgBox "[ExportAllModulesFromFolder] エラー " & Err.Number & ": " & Err.Description, vbCritical
+    Resume CleanExit
 End Sub
 
-
-
 '--------------------------------------------------
-' 機能  : 指定マクロファイル内の全モジュールを行単位で検索し、
-'         ヒット箇所を返す
-' 引数  : ByVal file_path      - マクロファイルのフルパス
-'         ByVal search_keyword - 検索する文字列
-'         Optional ByVal case_sensitive As Boolean = False
-'               True ＝大文字小文字を区別
-'               False＝区別しない（既定）
-' 返値  : Collection
-'         各要素は Variant 配列:
-'         (0)=ファイルパス
-'         (1)=モジュール名＋拡張子
-'         (2)=プロシージャ名 または "(モジュールレベル)"
-'         (3)=行番号
-'         (4)=該当行のコード
+' Sub  : SearchExportedModulesAndSummary
+' 機能  : エクスポート済みモジュールを対象にキーワード検索し
+'         ・1行目に検索文字列と実行日時を出力
+'         ・2行目にヘッダー、3行目以降に検索結果を出力
+' 引数  : ByVal export_folder   - モジュール出力基底フォルダ
+'        : ByVal search_keyword  - 検索文字列
+'        : Optional ByVal case_sensitive As Boolean = False
+' 戻値  : なし
 '--------------------------------------------------
-Public Function FindModulesByKeywordInFile( _
-    ByVal file_path As String, _
-    ByVal search_keyword As String, _
-    Optional ByVal case_sensitive As Boolean = False _
-) As Collection
-
-    Dim resultsColl   As Collection: Set resultsColl = New Collection
-    Dim targetWb      As Workbook
-    Dim vbComp        As VBIDE.VBComponent
-    Dim codeMod       As VBIDE.CodeModule
-    Dim totalLines    As Long
-    Dim ext           As String
-    Dim lineIndex     As Long
-    Dim lineText      As String
-    Dim procName      As String
-    Dim procKind      As VBIDE.vbext_ProcKind
-    Dim compareMode   As VbCompareMethod
+Public Sub SearchExportedModulesAndSummary(ByVal export_folder As String, ByVal search_keyword As String, Optional ByVal case_sensitive As Boolean = False)
+    On Error GoTo ErrHandler
+    Dim fso As Object
+    Dim rootFolder As Object
+    Dim folderItem As Object
+    Dim fileItem As Object
+    Dim wsDetail As Worksheet
+    Dim wsSummary As Worksheet
+    Dim summaryColl As Collection: Set summaryColl = New Collection
+    Dim ts As Object
+    Dim lineText As String
+    Dim lineNum As Long
+    Dim compareMode As VbCompareMethod
+    Dim currentProc As String
+    Dim currentRow As Long
+    Dim hitCount As Long
+    Dim currentTs As String
+    Dim fileExt As String
+    Dim procPattern As Object
 
     ' 比較モード設定
     If case_sensitive Then
@@ -298,47 +123,98 @@ Public Function FindModulesByKeywordInFile( _
         compareMode = vbTextCompare
     End If
 
-    ' 読み取り専用で開く
-    Set targetWb = Application.Workbooks.Open( _
-        fileName:=file_path, _
-        ReadOnly:=True _
-    )
+    ' FileSystemObject 作成
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    ' パス末尾の"\"を保証
+    If Right$(export_folder, 1) <> Application.PathSeparator Then export_folder = export_folder & Application.PathSeparator
+    Set rootFolder = fso.GetFolder(export_folder)
 
-    For Each vbComp In targetWb.VBProject.VBComponents
-        Select Case vbComp.Type
-        Case vbext_ct_StdModule:   ext = ".bas"
-        Case vbext_ct_ClassModule: ext = ".cls"
-        Case vbext_ct_MSForm:      ext = ".frm"
-        Case Else:                 ext = ""
-        End Select
+    ' 正規表現パターン準備
+    Set procPattern = CreateObject("VBScript.RegExp")
+    With procPattern
+        .Pattern = "^(?:Public|Private)?\s*(?:Sub|Function)\s+(\w+)"
+        .IgnoreCase = True
+    End With
 
-        If ext <> "" Then
-            Set codeMod = vbComp.CodeModule
-            totalLines = codeMod.CountOfLines
+    ' シート準備
+    On Error Resume Next
+    Application.DisplayAlerts = False
+        ThisWorkbook.Worksheets("SearchResults").Delete
+        ThisWorkbook.Worksheets("Summary").Delete
+    Application.DisplayAlerts = True
+    On Error GoTo ErrHandler
 
-            For lineIndex = 1 To totalLines
-                lineText = codeMod.Lines(lineIndex, 1)
-                If InStr(1, lineText, search_keyword, compareMode) > 0 Then
-                    ' プロシージャ名取得（モジュールレベルは空になる）
-                    On Error Resume Next
-                    procName = codeMod.ProcOfLine(lineIndex, procKind)
-                    On Error GoTo 0
-                    If procName = "" Then procName = "(モジュールレベル)"
+    ' Detail シート作成
+    Set wsDetail = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    wsDetail.Name = "SearchResults"
 
-                    resultsColl.Add Array( _
-                        file_path, _
-                        vbComp.Name & ext, _
-                        procName, _
-                        lineIndex, _
-                        Trim$(lineText) _
-                    )
-                End If
-            Next
-        End If
-    Next
+    ' 1行目に検索文字列と実行日時
+    currentTs = Format(Now, "yyyy-mm-dd hh:nn:ss")
+    wsDetail.Cells(1, 1).Value = "検索文字列: " & search_keyword & "    実行日時: " & currentTs
 
-    targetWb.Close SaveChanges:=False
-    Set FindModulesByKeywordInFile = resultsColl
+    ' 2行目にヘッダー
+    wsDetail.Range("A2:D2").Value = Array("モジュールファイル", "プロシージャ名", "行番号", "コード内容")
+    currentRow = 3
+
+    ' 各サブフォルダ（ブック名）を走査
+    For Each folderItem In rootFolder.SubFolders
+        For Each fileItem In folderItem.Files
+            fileExt = LCase(fso.GetExtensionName(fileItem.Name))
+            If fileExt = "bas" Or fileExt = "cls" Or fileExt = "frm" Then
+                hitCount = 0
+                Set ts = fso.OpenTextFile(fileItem.Path, 1)
+                lineNum = 0
+                currentProc = "(モジュールレベル)"
+                Do While Not ts.AtEndOfStream
+                    lineText = ts.ReadLine
+                    lineNum = lineNum + 1
+                    ' プロシージャ名を検出して保持
+                    If procPattern.Test(lineText) Then
+                        currentProc = procPattern.Execute(lineText)(0).SubMatches(0)
+                    End If
+                    ' キーワード検索
+                    If InStr(1, lineText, search_keyword, compareMode) > 0 Then
+                        wsDetail.Cells(currentRow, 1).Value = folderItem.Name & ":" & fileItem.Name
+                        wsDetail.Cells(currentRow, 2).Value = currentProc
+                        wsDetail.Cells(currentRow, 3).Value = lineNum
+                        wsDetail.Cells(currentRow, 4).Value = Trim$(lineText)
+                        currentRow = currentRow + 1
+                        hitCount = hitCount + 1
+                    End If
+                Loop
+                ts.Close
+                ' Summary 登録
+                summaryColl.Add Array(folderItem.Name, fileItem.Name, hitCount, "")
+            End If
+        Next fileItem
+    Next folderItem
+
+    ' Summary シート作成
+    Set wsSummary = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    wsSummary.Name = "Summary"
+    wsSummary.Range("A1:D1").Value = Array("ブック名", "モジュールファイル", "ヒット件数", "エラー内容")
+    Dim i As Long
+    For i = 1 To summaryColl.Count
+        wsSummary.Cells(i + 1, 1).Resize(1, 4).Value = summaryColl(i)
+    Next i
+    wsSummary.Columns("A:D").AutoFit
+    wsDetail.Columns("A:D").AutoFit
+
+    MsgBox "検索結果の出力が完了しました。", vbInformation
+
+CleanExit:
+    Exit Sub
+
+ErrHandler:
+    MsgBox "[SearchExportedModulesAndSummary] エラー " & Err.Number & ": " & Err.Description, vbCritical
+    Resume CleanExit
+End Sub
+
+'--------------------------------------------------
+' Function: ExtractProcedureName
+' （使用せず ProcPattern で行内検出に統一）
+'--------------------------------------------------
+Private Function ExtractProcedureName(ByVal lineText As String) As String
+    ExtractProcedureName = ""
 End Function
-
 
